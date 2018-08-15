@@ -1,0 +1,90 @@
+---
+- hosts: all
+  become: yes
+  tasks:
+   - name: Setup DNS server in resolve.conf  
+     lineinfile:
+       path: /etc/resolv.conf
+       line: 'nameserver 8.8.8.8'
+  
+   - name: setup proxy for all users
+     lineinfile:
+       path: /etc/profile
+       line: "{{ item.line }}"
+     with_items:
+       - { line : 'export http_proxy=http://192.168.56.111:8080'}  
+       - { line : 'export https_proxy=http://192.168.56.111:8080'}  
+       - { line : 'export ftp_proxy=http://192.168.56.111:8080'}  
+
+   - name: setup root access
+     authorized_key: user=root key="{{item}}"
+     with_file:
+       - ~/.ssh/id_rsa.pub
+
+   - name: Ensure hostname set
+     hostname: name={{ inventory_hostname }}
+     when: not inventory_hostname|match('(\d{1,3}\.){3}\d{1,3}')
+
+#   - name: Ensure hostname is in /etc/hosts
+#     lineinfile:
+#       path: /etc/hosts
+#       regexp: "^{{ ansible_default_ipv4.address }}.+$"
+#       line: "127.0.0.1 {{ansible_fdqn}}{{ ansible_hostname }}"
+
+   - name: Setup Yum Proxy
+     lineinfile:
+       path: /etc/yum.conf
+       line: 'proxy=http://192.168.56.111:8080/'
+
+   - name: Reboot immediately if there was a change.
+     shell: "sleep 5 && reboot"
+     async: 1
+     poll: 0
+#     when: task_result is changed
+
+   - name: Wait for the reboot to complete if there was a change.
+     wait_for_connection:
+       connect_timeout: 20
+       sleep: 5
+       delay: 5
+       timeout: 300
+#     when: task_result is changed
+
+
+   - name: upgrade all packages
+     yum:
+       name: '*'
+       state: latest
+     when: ansible_distribution == 'CentOS' or ansible_distribution == 'Red Hat Enterprise Linux'
+
+
+   - name: Essentials | Ensure that the repositories are update
+     apt:
+       update_cache: yes
+     when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+
+   - name: "FIX: Ubuntu 16.04 LTS doesn't come with certain modules, required by ansible"
+     raw: apt-get install python-minimal aptitude -y
+     become: true
+     become_user: root
+     become_method: sudo
+     when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+
+   - name: Update and upgrade apt packages
+     apt:
+       upgrade: yes
+       update_cache: yes
+       cache_valid_time: 86400 #One day
+     when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu'
+
+   - name: Essentials | Install all the essential packages
+     apt:
+       name: "{{ item }}"
+       update_cache: yes
+       state: present
+     with_items:
+       - build-essential
+       - python-software-properties
+       - git
+     when: ansible_distribution == 'Debian' or ansible_distribution == 'Ubuntu' 
+
